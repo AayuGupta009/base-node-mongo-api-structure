@@ -1,11 +1,14 @@
+const { Types } = require("mongoose");
 const db = require("../models");
 const Tutorial = db.tutorials;
+const students = db.student;
+const mongoose = require('mongoose');
 
 // Create and Save a new Tutorial
 exports.create = (req, res) => {
   // Validate request
   if (!req.body.title) {
-    res.status(400).send({ message: "Content can not be empty!" });
+    res.status(400).send({ message: "Title can not be empty!" });
     return;
   }
 
@@ -37,8 +40,8 @@ exports.findAll = (req, res) => {
 
   Tutorial.find(condition)
     .then(data => {
-      res.send(data);
-    })
+      const result = data.length === 0 ? 'No record found' : data;
+      res.json(result);    })
     .catch(err => {
       res.status(500).send({
         message:
@@ -65,28 +68,51 @@ exports.findOne = (req, res) => {
 };
 
 // Update a Tutorial by the id in the request
-exports.update = (req, res) => {
+exports.update = async (req, res) => {
+  try {
   if (!req.body) {
     return res.status(400).send({
       message: "Data to update can not be empty!"
     });
   }
-
-  const id = req.params.id;
-
-  Tutorial.findByIdAndUpdate(id, req.body, { useFindAndModify: false })
-    .then(data => {
-      if (!data) {
-        res.status(404).send({
-          message: `Cannot update Tutorial with id=${id}. Maybe Tutorial was not found!`
-        });
-      } else res.send({ message: "Tutorial was updated successfully." });
-    })
-    .catch(err => {
-      res.status(500).send({
-        message: "Error updating Tutorial with id=" + id
+  const { userId } = req.body;
+    const id = req.params.id;
+    let userName; 
+    const session = await mongoose.startSession();
+    const transactionOptions = {
+        readPreference: 'primary',
+        readConcern: { level: 'local' },
+        writeConcern: { w: 'majority' }
+    };
+    const transactionResult = await session.withTransaction(async () => {
+    
+    const updatedTutorialData = await Tutorial.findByIdAndUpdate({ _id: Types.ObjectId(id) }, { $push: { registeredStudent: userId } }, { session });
+      if (!updatedTutorialData) {
+        await session.abortTransaction();
+        return;
+      }
+      
+    const updatedStudentData = await students.findByIdAndUpdate({ _id: Types.ObjectId(userId)}, { $push: { tutorialRegistered: id } }, { session })
+      if (!updatedStudentData) {
+        await session.abortTransaction();
+      }
+    }, transactionOptions);
+    if (transactionResult) {
+      await session.commitTransaction();
+      return res.status(200).send({
+        message: `User ${userName} assigned to Tutorial with id: ${id}`
       });
-    });
+    }
+    await session.endSession();
+    return res.status(404).send({
+        message: "Error updating Tutorial"
+      });
+    
+  } catch (e) {
+    return res.status(500).send({
+        message: "Error updating Tutorial" + e.message
+      });
+   }
 };
 
 // Delete a Tutorial with the specified id in the request
